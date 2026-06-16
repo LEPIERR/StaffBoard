@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Staffing Board</title>
+    <script src="https://cdn.jsdelivr.net/npm/interactjs/dist/interact.min.js"></script>
+    <style>
+        body { font-family: sans-serif; background: #f0f0f0; margin: 0; display: flex; flex-direction: column; align-items: center; }
+        
+        #controls { background: white; padding: 15px; width: 100%; box-shadow: 0 2px 5px rgba(0,0,0,0.1); z-index: 100; display: flex; gap: 20px; align-items: center; justify-content: center; }
+
+        /* The Board Container */
+        #board {
+             position: relative;
+    /* This matches the proportion of your image */
+    width: 1100px; 
+    height: 800px; 
+    margin: 20px auto;
+    
+    /* POINTS TO THE FILE IN YOUR FOLDER */
+    background-image: url('staffing-board.png'); 
+    
+    background-size: 100% 100%;
+    background-repeat: no-repeat;
+    border: 3px solid #333;
+    border-radius: 8px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+    background-color: white;
+        }
+
+        /* The Name Tags */
+        .name-tag {
+            position: absolute;
+            width: 80px;
+            padding: 8px;
+            background: #fff;
+            border: 1px solid #999;
+            border-radius: 4px;
+            text-align: center;
+            font-size: 12px;
+            font-weight: bold;
+            cursor: grab;
+            user-select: none;
+            touch-action: none;
+            box-shadow: 2px 2px 5px rgba(0,0,0,0.2);
+            transition: box-shadow 0.2s;
+        }
+
+        .name-tag:active { cursor: grabbing; box-shadow: 5px 5px 15px rgba(0,0,0,0.4); }
+        
+        button { cursor: pointer; padding: 8px 15px; }
+    </style>
+</head>
+<body>
+
+<div id="controls">
+    <strong>Staffing Board</strong>
+    <input type="file" id="csvUpload" accept=".txt,.csv">
+    <button onclick="clearBoard()" style="color: red;">Clear All Staff</button>
+    <span id="status">Syncing...</span>
+</div>
+
+<div id="board">
+    <!-- Tags will appear here -->
+</div>
+
+<!-- Firebase SDKs -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+  import { getDatabase, ref, set, onValue, update, remove } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+
+  // 1. YOUR FIREBASE CONFIG GOES HERE
+  const firebaseConfig = {
+    apiKey: "AIzaSyB0FLSyaPz9TtQ7kMl6eEjKx6bjXtXk3WE",
+    authDomain: "staffing-board-2cc05.firebaseapp.com",
+    databaseURL: "https://staffing-board-2cc05-default-rtdb.firebaseio.com",
+    projectId: "staffing-board-2cc05",
+    storageBucket: "staffing-board-2cc05.firebasestorage.app",
+    messagingSenderId: "37977871168",
+    appId: "1:37977871168:web:d0839fa584da913632e0a5"
+  };
+
+  // Initialize Firebase
+  const app = initializeApp(firebaseConfig);
+  const db = getDatabase(app);
+  const staffRef = ref(db, 'staff');
+
+  const board = document.getElementById('board');
+
+  // 2. Drag and Drop Logic
+  interact('.name-tag').draggable({
+    listeners: {
+      move(event) {
+        const target = event.target;
+        const x = (parseFloat(target.getAttribute('data-x')) || 0) + event.dx;
+        const y = (parseFloat(target.getAttribute('data-y')) || 0) + event.dy;
+
+        target.style.transform = `translate(${x}px, ${y}px)`;
+        target.setAttribute('data-x', x);
+        target.setAttribute('data-y', y);
+      },
+      end(event) {
+        const id = event.target.id;
+        const x = event.target.getAttribute('data-x');
+        const y = event.target.getAttribute('data-y');
+        
+        // Update Firebase - This notifies all other users
+        update(ref(db, 'staff/' + id), { x: x, y: y });
+      }
+    }
+  });
+
+  // 3. Listen for changes from other users
+  onValue(staffRef, (snapshot) => {
+    const data = snapshot.val();
+    document.getElementById('status').innerText = "Live";
+    
+    // Clear current tags and redraw
+    board.innerHTML = '';
+    if (data) {
+      Object.keys(data).forEach(id => {
+        const person = data[id];
+        createTag(id, person.name, person.x, person.y);
+      });
+    }
+  });
+
+  function createTag(id, name, x, y) {
+    const div = document.createElement('div');
+    div.id = id;
+    div.className = 'name-tag';
+    div.innerText = name;
+    div.style.transform = `translate(${x}px, ${y}px)`;
+    div.setAttribute('data-x', x);
+    div.setAttribute('data-y', y);
+    board.appendChild(div);
+  }
+
+  // 4. Handle CSV Upload
+document.getElementById('csvUpload').addEventListener('change', function(e) {
+  const file = e.target.files[0];
+  const reader = new FileReader();
+  
+  reader.onload = function(event) {
+      const lines = event.target.result.split(/\r?\n/);
+      
+      // --- FTE BOX SETTINGS (Your working values) ---
+      const fteStartX = 25;
+      const fteStartY = 200;
+      const fteCols = 2;
+      const fteHGap = 95;
+      const fteVGap = 45;
+
+      // --- TEAM LEAD BOX SETTINGS (Adjust these to fit the top box) ---
+      const leadStartX = 300;   // Higher X to move right into the Team Lead box
+      const leadStartY = 40;    // Lower Y to move UP to the top of the board
+      const leadCols = 7;       // The Lead box is wide, so we can fit more columns
+      const leadHGap = 105;     
+      const leadVGap = 45;
+
+      let fteCount = 0;
+      let leadCount = 0;
+
+      lines.forEach((line) => {
+          const parts = line.split(',');
+          const name = parts[0] ? parts[0].trim() : "";
+          const role = parts[1] ? parts[1].trim().toLowerCase() : "";
+          
+          if(name !== "" && name !== "name") {
+              let posX, posY;
+
+              // Determine which box to use
+              if (role === "lead") {
+                  // Grid logic for Team Leads
+                  const col = leadCount % leadCols;
+                  const row = Math.floor(leadCount / leadCols);
+                  posX = leadStartX + (col * leadHGap);
+                  posY = leadStartY + (row * leadVGap);
+                  leadCount++;
+              } else {
+                  // Grid logic for FTEs
+                  const col = fteCount % fteCols;
+                  const row = Math.floor(fteCount / fteCols);
+                  posX = fteStartX + (col * fteHGap);
+                  posY = fteStartY + (row * fteVGap);
+                  fteCount++;
+              }
+
+              // Create unique ID and Save to Firebase
+              const newId = name.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase() + "_" + Math.floor(Math.random() * 10000);
+              
+              set(ref(db, 'staff/' + newId), {
+                  name: name,
+                  role: role, // optional: stores role in DB too
+                  x: posX,
+                  y: posY
+              });
+          }
+      });
+      alert(`Sync Complete: ${leadCount} Leads and ${fteCount} FTEs added.`);
+  };
+  reader.readAsText(file);
+});
+  window.clearBoard = () => { if(confirm("Clear everyone?")) remove(staffRef); };
+
+</script>
+</body>
+</html>
